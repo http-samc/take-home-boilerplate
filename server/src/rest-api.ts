@@ -4,7 +4,11 @@ import cors from "cors";
 dotenv.config();
 
 const app = express();
-import { db } from "./db/knex";
+import { createContent, fetchContent } from "./controllers/content.controller";
+import {
+  insertFragments,
+  readFragments,
+} from "./controllers/fragment.controller";
 
 //middleware
 app.use(cors());
@@ -23,22 +27,57 @@ app.get("/", async (_req, res) => {
   res.json({ hello: "world", "client-default-port": 3000 });
 });
 
-// GET /examples - Fetches all records from the example_foreign_table
-app.get("/examples", async (_req, res) => {
-  const docs = await db("example_foreign_table").select("*");
-  res.json({ docs });
+// Get the content for a given slug. Supply `password` as a query parameter if needed.
+app.get("/content/:contentSlug", async (_req, res) => {
+  try {
+    const { contentSlug } = _req.params;
+    const { password } = _req.query;
+
+    if (!contentSlug) {
+      res.sendStatus(400);
+      return;
+    }
+
+    const content = await fetchContent(contentSlug, password as string);
+
+    if (!content) {
+      // Prevent hijacking.
+      res.sendStatus(404);
+      return;
+    }
+
+    const text = await readFragments(contentSlug, password as string);
+
+    res.json({ ...content, text });
+  } catch (error) {
+    console.error(error);
+    res.sendStatus(500);
+  }
 });
 
-// POST /examples - Creates a new record with auth method and name, returns the created document
-app.post("/examples", async (req, res) => {
-  const { authMethod, name } = req.body;
-  const [doc] = await db("example_foreign_table")
-    .insert({
-      authMethod,
-      name,
-    })
-    .returning("*");
-  res.json({ doc });
+// Add Content.
+app.post("/content", async (req, res) => {
+  try {
+    const { expiry, isEnv, text, password } = req.body as {
+      expiry: Date;
+      isEnv: boolean;
+      text: string;
+      password?: string;
+    };
+
+    if (!expiry || expiry < new Date() || isEnv === undefined || !text) {
+      res.sendStatus(400);
+      return;
+    }
+
+    const contentSlug = await createContent(expiry, isEnv, password);
+    await insertFragments(text, contentSlug, password);
+
+    res.json({ contentSlug });
+  } catch (error) {
+    console.error(error);
+    res.sendStatus(500);
+  }
 });
 
 const PORT = process.env.PORT || 8000;
